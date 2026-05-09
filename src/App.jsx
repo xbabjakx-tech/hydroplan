@@ -1,8 +1,57 @@
 import { useState, useEffect, useCallback } from "react";
 
-const STORAGE_KEY = "dewpoint_v2";
+const STORAGE_KEY = "dewpoint_v3";
 const HISTORY_KEY = "dewpoint_history";
 
+// ─── RITUÁLY ─────────────────────────────────────────────────────────────────
+const RITUALS = [
+  {
+    id: "morning",
+    time: "07:00",
+    icon: "🌅",
+    product: "Collagen Drink",
+    tagline: "Start radiant",
+    desc: "Naštartuj deň s kolagénom pre žiarivú pleť a zdravé kĺby.",
+    color: "#f59e0b",
+    colorBg: "rgba(245,158,11,0.12)",
+    colorBorder: "rgba(245,158,11,0.35)",
+  },
+  {
+    id: "midday",
+    time: "11:00",
+    icon: "⚡",
+    product: "Electrolyte Drink",
+    tagline: "Stay sharp",
+    desc: "Doplň elektrolyty a udrž koncentráciu počas dňa.",
+    color: "#3d6600",
+    colorBg: "rgba(61,102,0,0.1)",
+    colorBorder: "rgba(61,102,0,0.3)",
+  },
+  {
+    id: "postworkout",
+    time: "Po tréningu",
+    icon: "💪",
+    product: "Refuel Drink",
+    tagline: "Recover faster",
+    desc: "Obnoviť svaly a doplniť energiu po fyzickom výkone.",
+    color: "#c44400",
+    colorBg: "rgba(196,68,0,0.1)",
+    colorBorder: "rgba(196,68,0,0.3)",
+  },
+  {
+    id: "evening",
+    time: "21:00",
+    icon: "🌙",
+    product: "Regeneration & Relax",
+    tagline: "Rest & restore",
+    desc: "Priprav telo na regeneráciu a hlboký spánok.",
+    color: "#5b21b6",
+    colorBg: "rgba(91,33,182,0.1)",
+    colorBorder: "rgba(91,33,182,0.3)",
+  },
+];
+
+// ─── VÝPOČTY ──────────────────────────────────────────────────────────────────
 function calcDailyGoal({ weight, activity, climate, gender, age }) {
   let base = weight * 35;
   if (gender === "female") base = weight * 31;
@@ -65,7 +114,7 @@ function loadState() {
     if (!raw) return null;
     const s = JSON.parse(raw);
     if (s.schedule?.length > 0 && !isToday(s.schedule[0]))
-      return { ...s, schedule: [], drunk: [], skipped: [], step: "setup" };
+      return { ...s, schedule: [], drunk: [], skipped: [], ritualsDone: [], step: "home" };
     return s;
   } catch { return null; }
 }
@@ -154,24 +203,34 @@ const bnr = (color, align) => ({ background:"rgba(255,255,255,0.5)", border:`1.5
 const lbl_ = { fontFamily:"'DM Mono',monospace", fontSize:10, color:"#1a2505", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:7, fontWeight:500 };
 const inp_ = { width:"100%", background:"rgba(255,255,255,0.52)", border:"1.5px solid rgba(10,15,2,0.18)", borderRadius:12, color:"#0a0f02", fontSize:20, fontWeight:700, padding:"9px 32px 9px 12px", outline:"none", fontFamily:"'Outfit',sans-serif" };
 
+// ─── APP ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const saved = loadState();
-  const [step, setStep] = useState(saved?.step || "setup");
+  const [step, setStep] = useState(saved?.step || "home"); // home | setup | tracker
   const [tab, setTab] = useState("today");
   const [form, setForm] = useState(saved?.form || { weight:"", age:"", gender:"male", activity:"low", climate:"normal", wake:7, sleep:23, glassSize:"250" });
   const [goal, setGoal] = useState(saved?.goal || null);
   const [schedule, setSchedule] = useState(saved?.schedule || []);
   const [drunk, setDrunk] = useState(saved?.drunk || []);
   const [skipped, setSkipped] = useState(saved?.skipped || []);
+  const [ritualsDone, setRitualsDone] = useState(saved?.ritualsDone || []);
   const [notifPerm, setNotifPerm] = useState("default");
   const [lastReminder, setLastReminder] = useState(null);
   const [pulse, setPulse] = useState(false);
   const [now, setNow] = useState(new Date());
   const [history, setHistory] = useState(loadHistory());
+  const [expandedRitual, setExpandedRitual] = useState(null);
+  const [toast, setToast] = useState(null); // { msg, key }
+
+  const showToast = (msg) => {
+    const key = Date.now();
+    setToast({ msg, key });
+    setTimeout(() => setToast(t => t?.key === key ? null : t), 2500);
+  };
 
   const gs = parseInt(form.glassSize) || 250;
 
-  useEffect(() => { saveState({ step, form, goal, schedule, drunk, skipped }); }, [step, form, goal, schedule, drunk, skipped]);
+  useEffect(() => { saveState({ step, form, goal, schedule, drunk, skipped, ritualsDone }); }, [step, form, goal, schedule, drunk, skipped, ritualsDone]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(t); }, []);
   useEffect(() => { if ("Notification" in window) setNotifPerm(Notification.permission); }, []);
 
@@ -185,15 +244,6 @@ export default function App() {
     setHistory(newHistory);
     saveHistory(newHistory);
   }, [drunk, goal, step]);
-
-  useEffect(() => {
-    if ("Notification" in window && notifPerm === "granted") {
-      const n = new Date();
-      if (n.getHours() === (form.wake || 7) && n.getMinutes() === 0) {
-        new Notification("💧 Dewy Point — Nový deň!", { body: "You look thirsty. Let's fix it.", icon: "/icon-192.png" });
-      }
-    }
-  }, [now]);
 
   const requestNotif = async () => {
     if ("Notification" in window) { const p = await Notification.requestPermission(); setNotifPerm(p); }
@@ -215,7 +265,7 @@ export default function App() {
   const nextReminder = schedule.find((t, i) => !drunk.includes(i) && !skipped.includes(i) && new Date(t) > now);
   const streak = calcStreak(history);
   const last7 = getLast7Days(history);
-  const isComplete = drunkMl >= goal;
+  const isComplete = goal ? drunkMl >= goal : false;
 
   const checkReminders = useCallback(() => {
     if (!schedule.length) return;
@@ -245,11 +295,23 @@ export default function App() {
   const skip = (i) => { if (drunk.includes(i)||skipped.includes(i)) return; setSkipped(s=>[...s,i]); };
   const undoDrink = (i) => setDrunk(d=>d.filter(x=>x!==i));
   const undoSkip = (i) => setSkipped(s=>s.filter(x=>x!==i));
+  const toggleRitual = (id) => {
+    const ritual = RITUALS.find(r => r.id === id);
+    setRitualsDone(r => {
+      if (r.includes(id)) return r.filter(x => x !== id);
+      showToast(`✓ ${ritual?.product} splnený!`);
+      return [...r, id];
+    });
+  };
+
+  const ritualsCompleted = ritualsDone.length;
+  const waterPct = goal ? Math.min(100, pct) : 0;
 
   return (
     <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#d4f545 0%,#b5e020 45%,#c8f135 100%)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Outfit',sans-serif", position:"relative", overflow:"hidden", padding:20 }}>
       <style>{css}</style>
 
+      {/* Orosenie */}
       <div style={{ position:"fixed", inset:0, zIndex:1, pointerEvents:"none", overflow:"hidden" }}>
         {DROPS.map(([left,w,h,delay,dur,op],i) => (
           <div key={i} style={{ position:"absolute", left:`${left}%`, top:0, width:w, display:"flex", flexDirection:"column", alignItems:"center", animation:`fallDown ${dur}s ${delay}s linear infinite`, opacity:op }}>
@@ -263,21 +325,168 @@ export default function App() {
       </div>
       <div style={{ position:"fixed", inset:0, zIndex:1, pointerEvents:"none", background:"linear-gradient(180deg,rgba(255,255,255,0.1) 0%,rgba(255,255,255,0.03) 50%,rgba(255,255,255,0.07) 100%)" }} />
 
+      {/* Karta */}
       <div style={{ position:"relative", zIndex:2, width:"100%", maxWidth:420, background:"rgba(255,255,255,0.35)", backdropFilter:"blur(30px) saturate(1.5)", WebkitBackdropFilter:"blur(30px) saturate(1.5)", border:"1px solid rgba(255,255,255,0.65)", borderRadius:24, boxShadow:"inset 0 2px 0 rgba(255,255,255,0.85), 0 16px 56px rgba(70,120,0,0.18)" }}>
-        {step === "setup"
-          ? <Setup form={form} setForm={setForm} onStart={handleStart} notifPerm={notifPerm} onRequestNotif={requestNotif} hasSaved={!!saved?.goal} streak={streak} />
-          : <TrackerShell tab={tab} setTab={setTab} onReset={()=>{setDrunk([]);setSkipped([]);setStep("setup");}}>
-              {tab === "today" && <TodayTab goal={goal} schedule={schedule} drunk={drunk} skipped={skipped} drunkMl={drunkMl} pct={pct} nextReminder={nextReminder} pulse={pulse} now={now} drink={drink} skip={skip} undoDrink={undoDrink} undoSkip={undoSkip} notifPerm={notifPerm} onRequestNotif={requestNotif} lastReminder={lastReminder} amounts={amounts} missedCount={missedCount} catchUpMl={catchUpMl} remainingGlasses={remainingGlasses} age={form.age} isComplete={isComplete} gs={gs} />}
-              {tab === "history" && <HistoryTab last7={last7} history={history} />}
-              {tab === "badges" && <BadgesTab streak={streak} history={history} />}
-            </TrackerShell>
-        }
+
+        {step === "home" && (
+          <HomeScreen
+            ritualsDone={ritualsDone} toggleRitual={toggleRitual}
+            waterPct={waterPct} drunkMl={drunkMl} goal={goal}
+            streak={streak} ritualsCompleted={ritualsCompleted}
+            onGoToWater={() => goal ? setStep("tracker") : setStep("setup")}
+            onSetup={() => setStep("setup")}
+            expandedRitual={expandedRitual} setExpandedRitual={setExpandedRitual}
+            hasGoal={!!goal}
+          />
+        )}
+
+        {/* Toast */}
+        {toast && (
+          <div key={toast.key} style={{
+            position:"absolute", bottom:24, left:"50%", transform:"translateX(-50%)",
+            background:C.black, color:C.neon, borderRadius:12,
+            padding:"10px 20px", fontSize:13, fontWeight:700,
+            fontFamily:"'Outfit',sans-serif", whiteSpace:"nowrap",
+            boxShadow:"0 4px 20px rgba(10,15,2,0.3)",
+            animation:"toastIn 0.3s ease",
+            zIndex:10,
+          }}>
+            {toast.msg}
+          </div>
+        )}
+
+        {step === "setup" && (
+          <Setup form={form} setForm={setForm} onStart={handleStart} notifPerm={notifPerm} onRequestNotif={requestNotif} hasSaved={!!goal} streak={streak} onBack={() => setStep("home")} />
+        )}
+
+        {step === "tracker" && (
+          <TrackerShell tab={tab} setTab={setTab} onHome={() => setStep("home")}>
+            {tab === "today" && <TodayTab goal={goal} schedule={schedule} drunk={drunk} skipped={skipped} drunkMl={drunkMl} pct={pct} nextReminder={nextReminder} pulse={pulse} now={now} drink={drink} skip={skip} undoDrink={undoDrink} undoSkip={undoSkip} notifPerm={notifPerm} onRequestNotif={requestNotif} lastReminder={lastReminder} amounts={amounts} missedCount={missedCount} catchUpMl={catchUpMl} remainingGlasses={remainingGlasses} age={form.age} isComplete={isComplete} gs={gs} />}
+            {tab === "history" && <HistoryTab last7={last7} history={history} />}
+            {tab === "badges" && <BadgesTab streak={streak} history={history} />}
+          </TrackerShell>
+        )}
       </div>
     </div>
   );
 }
 
-function Setup({ form, setForm, onStart, notifPerm, onRequestNotif, hasSaved, streak }) {
+// ─── HOME SCREEN ─────────────────────────────────────────────────────────────
+function HomeScreen({ ritualsDone, toggleRitual, waterPct, drunkMl, goal, streak, ritualsCompleted, onGoToWater, onSetup, expandedRitual, setExpandedRitual, hasGoal }) {
+  const allDone = ritualsCompleted === RITUALS.length;
+
+  return (
+    <div style={{ padding:"36px 22px 28px", display:"flex", flexDirection:"column", gap:16 }}>
+      {/* Header */}
+      <div style={{ position:"relative", textAlign:"center" }}>
+        <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:24, fontWeight:900, color:C.black, letterSpacing:5 }}>DEWY POINT</div>
+        <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:14, fontStyle:"italic", color:C.dark, marginTop:3 }}>You look thirsty. Let's fix it.</div>
+        {streak > 0 && <div style={{ position:"absolute", top:0, right:0, fontSize:12, color:C.neonDeep, fontWeight:700 }}>🔥 {streak} dní</div>}
+      </div>
+
+      {/* Denný prehľad */}
+      <div style={{ background:"rgba(255,255,255,0.5)", border:"1px solid rgba(255,255,255,0.7)", borderRadius:16, padding:"14px 16px", display:"flex", gap:12, alignItems:"center" }}>
+        {/* Mini water ring */}
+        <div style={{ position:"relative", width:56, height:56, flexShrink:0 }}>
+          <svg width="56" height="56" viewBox="0 0 56 56">
+            <circle cx="28" cy="28" r="22" fill="rgba(255,255,255,0.4)" stroke="rgba(10,15,2,0.1)" strokeWidth="5" />
+            <circle cx="28" cy="28" r="22" fill="none"
+              stroke={waterPct >= 100 ? C.green : C.neonDeep} strokeWidth="5" strokeLinecap="round"
+              strokeDasharray={2*Math.PI*22} strokeDashoffset={2*Math.PI*22*(1-waterPct/100)}
+              transform="rotate(-90 28 28)"
+              style={{ transition:"stroke-dashoffset 0.6s ease" }}
+            />
+          </svg>
+          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Outfit',sans-serif", fontSize:13, fontWeight:900, color:C.neonDeep }}>{waterPct}%</div>
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:13, fontWeight:700, color:C.black }}>Hydratácia dnes</div>
+          <div style={{ fontSize:12, color:C.mid }}>{drunkMl} / {goal || "?"} ml vody</div>
+          <div style={{ fontSize:12, color:C.mid, marginTop:2 }}>💊 Rituály: {ritualsCompleted}/{RITUALS.length} splnených</div>
+        </div>
+        <button
+          onClick={onGoToWater}
+          style={{ background:C.black, border:"none", color:C.neon, borderRadius:10, padding:"8px 12px", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:"'Outfit',sans-serif", whiteSpace:"nowrap" }}
+        >
+          {hasGoal ? "Voda →" : "Nastaviť →"}
+        </button>
+      </div>
+
+      {/* Denný systém */}
+      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:C.mid, letterSpacing:2, textTransform:"uppercase", fontWeight:500 }}>
+        Tvoj denný systém
+      </div>
+
+      {RITUALS.map((r) => {
+        const done = ritualsDone.includes(r.id);
+        const expanded = expandedRitual === r.id;
+        return (
+          <div key={r.id}
+            style={{ background: done ? "rgba(255,255,255,0.55)" : r.colorBg, border: `1.5px solid ${done ? "rgba(15,102,0,0.3)" : r.colorBorder}`, borderRadius:16, overflow:"hidden", transition:"all 0.3s" }}
+          >
+            {/* Hlavný riadok */}
+            <div style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", cursor:"pointer" }}
+              onClick={() => setExpandedRitual(expanded ? null : r.id)}>
+              {/* Ikona + čas */}
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2, minWidth:36 }}>
+                <div style={{ fontSize:24 }}>{r.icon}</div>
+                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:r.color, fontWeight:500 }}>{r.time}</div>
+              </div>
+              {/* Text */}
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:15, fontWeight:800, color:C.black }}>{r.product}</div>
+                  <div style={{ fontSize:9, background:"rgba(10,15,2,0.08)", color:C.mid, borderRadius:6, padding:"2px 6px", fontFamily:"'DM Mono',monospace", letterSpacing:0.5 }}>COMING SOON</div>
+                </div>
+                <div style={{ fontSize:12, fontStyle:"italic", color:r.color, fontWeight:600, marginTop:1 }}>"{r.tagline}"</div>
+              </div>
+              {/* Toggle */}
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleRitual(r.id); }}
+                style={{ width:36, height:36, borderRadius:"50%", border:`2px solid ${done ? C.green : r.colorBorder}`, background: done ? C.green : "rgba(255,255,255,0.5)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, transition:"all 0.2s", flexShrink:0 }}
+              >
+                {done ? "✓" : ""}
+              </button>
+            </div>
+
+            {/* Expandovaný detail */}
+            {expanded && (
+              <div style={{ padding:"0 16px 14px", borderTop:"1px solid rgba(255,255,255,0.4)" }}>
+                <p style={{ fontSize:13, color:C.dark, marginTop:10, lineHeight:1.5 }}>{r.desc}</p>
+                <div style={{ marginTop:10, display:"flex", gap:6 }}>
+                  <div style={{ flex:1, background:"rgba(255,255,255,0.5)", borderRadius:10, padding:"8px 10px", textAlign:"center" }}>
+                    <div style={{ fontSize:9, fontFamily:"'DM Mono',monospace", color:C.mid, letterSpacing:1 }}>FORMÁT</div>
+                    <div style={{ fontSize:12, fontWeight:700, color:C.black, marginTop:2 }}>Práškový drink</div>
+                  </div>
+                  <div style={{ flex:1, background:"rgba(255,255,255,0.5)", borderRadius:10, padding:"8px 10px", textAlign:"center" }}>
+                    <div style={{ fontSize:9, fontFamily:"'DM Mono',monospace", color:C.mid, letterSpacing:1 }}>OBJEM</div>
+                    <div style={{ fontSize:12, fontWeight:700, color:C.black, marginTop:2 }}>300–400 ml</div>
+                  </div>
+                  <div style={{ flex:1, background:"rgba(255,255,255,0.5)", borderRadius:10, padding:"8px 10px", textAlign:"center" }}>
+                    <div style={{ fontSize:9, fontFamily:"'DM Mono',monospace", color:C.mid, letterSpacing:1 }}>STATUS</div>
+                    <div style={{ fontSize:11, fontWeight:700, color:r.color, marginTop:2 }}>V príprave</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Všetko splnené banner */}
+      {allDone && (
+        <div style={{ background:"rgba(255,255,255,0.6)", border:`2px solid ${C.green}`, borderRadius:14, padding:"12px 16px", textAlign:"center" }}>
+          <div style={{ fontSize:22 }}>🎉</div>
+          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:14, fontWeight:800, color:C.green, marginTop:4 }}>DENNÝ SYSTÉM SPLNENÝ!</div>
+          <div style={{ fontSize:12, color:C.mid, marginTop:2 }}>Hydratácia na max úrovni. Skvelá práca!</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SETUP ────────────────────────────────────────────────────────────────────
+function Setup({ form, setForm, onStart, notifPerm, onRequestNotif, hasSaved, streak, onBack }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const valid = form.weight && !isNaN(form.weight) && form.age && !isNaN(form.age);
   const a = parseInt(form.age);
@@ -286,11 +495,12 @@ function Setup({ form, setForm, onStart, notifPerm, onRequestNotif, hasSaved, st
 
   return (
     <div style={{ padding:"36px 24px 32px" }}>
-      <div style={{ textAlign:"center", marginBottom:28 }}>
-        <div style={{ marginBottom:12, display:"flex", justifyContent:"center" }} className="dropAnim"><GlassDrop size={56} /></div>
-        <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:26, fontWeight:900, color:C.black, letterSpacing:6 }}>DEWY POINT</div>
-        <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:17, fontStyle:"italic", color:C.dark, marginTop:6 }}>You look thirsty. Let's fix it.</div>
-        {streak > 0 && <div style={{ marginTop:8, fontSize:12, color:C.neonDeep, fontWeight:700 }}>🔥 {streak} dní v rade</div>}
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24 }}>
+        <button style={{ background:"none", border:"none", color:C.dark, cursor:"pointer", fontSize:14, fontFamily:"'Outfit',sans-serif", fontWeight:600, padding:0 }} onClick={onBack}>← Späť</button>
+        <div>
+          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:18, fontWeight:900, color:C.black, letterSpacing:4 }}>NASTAVENIA</div>
+          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:11, fontStyle:"italic", color:C.dark }}>Nastav svoj pitný plán</div>
+        </div>
       </div>
 
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
@@ -333,7 +543,7 @@ function Setup({ form, setForm, onStart, notifPerm, onRequestNotif, hasSaved, st
 
         {preview && (
           <div style={{ background:"rgba(255,255,255,0.5)", border:`1.5px solid ${C.neonDeep}`, borderRadius:12, padding:"10px 16px", textAlign:"center" }}>
-            <div style={{ fontSize:10, color:C.mid, fontFamily:"'DM Mono',monospace", letterSpacing:1 }}>DENNÝ CIEĽ</div>
+            <div style={{ fontSize:10, color:C.mid, fontFamily:"'DM Mono',monospace", letterSpacing:1 }}>DENNÝ CIEĽ VODY</div>
             <div style={{ fontSize:26, fontWeight:900, color:C.black, lineHeight:1.3 }}>{preview} ml</div>
             <div style={{ fontSize:11, color:C.mid }}>{Math.ceil(preview/(parseInt(form.glassSize)||250))} pohárov × {parseInt(form.glassSize)||250} ml</div>
           </div>
@@ -346,25 +556,24 @@ function Setup({ form, setForm, onStart, notifPerm, onRequestNotif, hasSaved, st
 
         <button style={{ background:valid?C.black:"rgba(10,15,2,0.12)", border:"none", borderRadius:14, color:valid?C.neon:C.muted, fontSize:15, fontWeight:800, padding:"15px 20px", cursor:valid?"pointer":"default", fontFamily:"'Outfit',sans-serif", letterSpacing:1, transition:"all 0.25s", display:"flex", alignItems:"center", justifyContent:"center", gap:8, boxShadow:valid?"0 4px 20px rgba(10,15,2,0.3)":"none" }}
           onClick={onStart} disabled={!valid}>
-          {hasSaved?"NOVÝ DEŇ":"ŠTART"} <span style={{fontSize:18}}>→</span>
+          ŠTART → <span style={{fontSize:18}}>💧</span>
         </button>
       </div>
     </div>
   );
 }
 
-function TrackerShell({ tab, setTab, onReset, children }) {
+// ─── TRACKER ─────────────────────────────────────────────────────────────────
+function TrackerShell({ tab, setTab, onHome, children }) {
   return (
     <div style={{ padding:"24px 22px 20px", display:"flex", flexDirection:"column", gap:12 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-        <div>
-          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:16, fontWeight:900, color:C.black, letterSpacing:5 }}>DEWY POINT</div>
-          <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:13, fontStyle:"italic", color:C.dark }}>You look thirsty. Let's fix it.</div>
-        </div>
-        <button style={{ background:"none", border:"none", fontSize:18, cursor:"pointer", opacity:0.6 }} onClick={onReset}>⚙️</button>
+        <button style={{ background:"none", border:"none", color:C.dark, cursor:"pointer", fontSize:14, fontFamily:"'Outfit',sans-serif", fontWeight:600, padding:0 }} onClick={onHome}>← Domov</button>
+        <div style={{ fontFamily:"'Outfit',sans-serif", fontSize:15, fontWeight:900, color:C.black, letterSpacing:4 }}>DEWY POINT</div>
+        <div style={{ width:60 }} />
       </div>
       <div style={{ display:"flex", gap:6, background:"rgba(255,255,255,0.35)", borderRadius:12, padding:4 }}>
-        {[["today","💧 Dnes"],["history","📊 História"],["badges","🏆 Odznaky"]].map(([t,l]) => (
+        {[["today","💧 Voda"],["history","📊 História"],["badges","🏆 Odznaky"]].map(([t,l]) => (
           <button key={t} style={{ flex:1, padding:"7px 4px", borderRadius:9, border:"none", cursor:"pointer", fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:12, transition:"all 0.2s", background:tab===t?C.black:"transparent", color:tab===t?C.neon:C.mid }}
             onClick={()=>setTab(t)}>{l}</button>
         ))}
@@ -457,11 +666,7 @@ function HistoryTab({ last7, history }) {
         ))}
       </div>
       <div style={{display:"flex",gap:8}}>
-        {[
-          ["Splnených",`${last7.filter(d=>d.completed).length}/7`,"tento týždeň"],
-          ["Priemer",`${Math.round(last7.reduce((s,d)=>s+d.pct,0)/7)}%`,"hydratácia"],
-          ["Celkovo",`${totalDays}`,"splnených dní"],
-        ].map(([label,val,sub]) => (
+        {[["Splnených",`${last7.filter(d=>d.completed).length}/7`,"tento týždeň"],["Priemer",`${Math.round(last7.reduce((s,d)=>s+d.pct,0)/7)}%`,"hydratácia"],["Celkovo",`${totalDays}`,"splnených dní"]].map(([label,val,sub]) => (
           <div key={label} style={{flex:1,background:"rgba(255,255,255,0.45)",border:"1px solid rgba(255,255,255,0.65)",borderRadius:12,padding:"10px 8px",textAlign:"center"}}>
             <div style={{fontSize:9,fontFamily:"'DM Mono',monospace",color:C.mid,letterSpacing:0.5}}>{label}</div>
             <div style={{fontSize:20,fontWeight:900,color:C.black,lineHeight:1.2}}>{val}</div>
@@ -515,8 +720,8 @@ const css = `
   body { background:#c8f135; }
   @keyframes fallDown { 0% { transform:translateY(-120px); opacity:0; } 6% { opacity:1; } 90% { opacity:1; } 100% { transform:translateY(105vh); opacity:0; } }
   @keyframes dpulse { 0% { transform:scale(1); } 50% { transform:scale(1.05); } 100% { transform:scale(1); } }
-  .dropAnim { animation:dropFloat 3.5s ease-in-out infinite; }
-  @keyframes dropFloat { 0%,100% { transform:translateY(0); filter:drop-shadow(0 8px 18px rgba(70,130,0,0.22)); } 50% { transform:translateY(-7px); filter:drop-shadow(0 16px 24px rgba(70,130,0,0.32)); } }
+  @keyframes dropFloat { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
+  @keyframes toastIn { 0% { opacity:0; transform:translateX(-50%) translateY(10px); } 100% { opacity:1; transform:translateX(-50%) translateY(0); } }
   .lightRange { -webkit-appearance:none; width:100%; height:3px; background:rgba(10,15,2,0.18); border-radius:2px; outline:none; }
   .lightRange::-webkit-slider-thumb { -webkit-appearance:none; width:20px; height:20px; border-radius:50%; background:#0a0f02; cursor:pointer; box-shadow:0 2px 8px rgba(10,15,2,0.3); }
   ::-webkit-scrollbar { width:3px; }
